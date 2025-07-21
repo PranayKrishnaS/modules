@@ -1,0 +1,115 @@
+parameters:
+- name: environmentservicenameazurerm
+  type: string
+- name: working_directory
+  type: string
+- name: environmental_tfvars
+  type: string
+- name: backendServiceArm
+  type: string
+- name: backendAzureRmResourceGroupName
+  type: string
+- name: backendAzureRmStorageAccountName
+  type: string
+- name: backendAzureRmContainerName
+  type: string
+- name: backendAzureRmKey
+  type: string 
+- name: terraformVersion
+  type: string
+- name: apply_working_directory
+  type: string
+- name: known_host
+  type: string
+- name: public_key
+  type: string
+- name: environmentstagename
+  type: string
+- name: checkov_prisma_key
+  type: string
+- name: checkov_prisma_url
+  type: string
+stages:
+ - stage: terraform_prepare_init_plan
+   jobs:
+   - deployment: terraform_prepare_init_plan
+     displayName: terraform_prepare_init_plan
+     environment: 'terraform_prepare_init_plan'
+     timeoutInMinutes: 0
+     strategy: 
+       runOnce:
+         deploy:
+           steps:
+           - checkout: self
+           - task: InstallSSHKey@0
+             displayName: 'Install an SSH key'
+             inputs:   
+               knownHostsEntry: ${{ parameters.known_host }}
+               sshPublicKey: ${{ parameters.public_key }}
+               sshKeySecureFile: 'id_rsa'
+           - task: TerraformInstaller@0
+             displayName: 'Install Terraform ${{ parameters.terraformVersion }}'
+             inputs:
+               terraformVersion: ${{ parameters.terraformVersion }}         
+           - task: TerraformTaskV2@2
+             displayName: 'Terraform : azurerm Init'
+             inputs:
+               workingDirectory: ${{ parameters.working_directory }}
+               backendServiceArm: ${{ parameters.backendServiceArm }}
+               backendAzureRmResourceGroupName: ${{ parameters.backendAzureRmResourceGroupName }}
+               backendAzureRmStorageAccountName: ${{ parameters.backendAzureRmStorageAccountName }}
+               backendAzureRmContainerName:  ${{ parameters.backendAzureRmContainerName }}
+               backendAzureRmKey:  ${{ parameters.backendAzureRmKey }}
+           - task: TerraformTaskV2@2
+             displayName: 'Terraform : azurerm Plan'
+             inputs:
+               command: plan
+               workingDirectory: ${{ parameters.working_directory }}
+               commandOptions: ${{ parameters.environmental_tfvars }} --out ${{ parameters.environmentstagename }}.tfplan
+               environmentServiceNameAzureRM: ${{ parameters.environmentservicenameazurerm }}
+           - publish: "$(Pipeline.Workspace)"
+             artifact: "terraformplan"
+ - stage: terraform_apply
+   jobs:
+   - deployment: terraform_apply
+     displayName: terraform_apply
+     environment: 'terraform_apply'
+     timeoutInMinutes: 0
+     strategy: 
+       runOnce:
+         deploy:
+           steps:
+           - task: TerraformInstaller@0
+             displayName: 'Install Terraform ${{ parameters.terraformVersion }}'
+             inputs:
+               terraformVersion: ${{ parameters.terraformVersion }}
+           - task: PowerShell@2
+             inputs:
+               targetType: 'inline'
+               script: |
+                 pip3 install checkov
+           - task: TerraformTaskV3@3
+             displayName: 'Terraform : azurerm'
+             inputs:
+               provider: 'azurerm'
+               command: show
+               workingDirectory: ${{ parameters.apply_working_directory }}
+               commandOptions: -no-color ${{ parameters.environmentstagename }}.tfplan
+               fileName: '$(System.DefaultWorkingDirectory)/${{ parameters.environmentstagename }}.json'
+               outputTo: file
+               outputFormat: json
+               environmentServiceNameAzureRM: ${{ parameters.environmentservicenameazurerm }}
+           - task: CmdLine@2
+             displayName: 'Checkov Static Code Analysis'
+             inputs:
+               targetType: 'inline'
+               script: |
+                 cd $(System.DefaultWorkingDirectory)
+                 checkov -f ${{ parameters.environmentstagename }}.json --repo-id PranayKrishnaS/acme-ads-prod-project  --bc-api-key ${{ parameters.checkov_prisma_key }} --prisma-api-url ${{ parameters.checkov_prisma_url }} --soft-fail --use-enforcement-rules
+           - task: TerraformTaskV2@2
+             displayName: 'Terraform : azurerm Apply'
+             inputs:
+               command: apply
+               workingDirectory: ${{ parameters.apply_working_directory }}
+               commandOptions: ${{ parameters.environmental_tfvars }}
+               environmentServiceNameAzureRM: ${{ parameters.environmentservicenameazurerm }}

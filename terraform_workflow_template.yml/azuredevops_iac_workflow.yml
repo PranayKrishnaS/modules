@@ -1,0 +1,111 @@
+parameters:
+- name: environmentservicenameazurerm
+  type: string
+- name: working_directory
+  type: string
+- name: environmental_tfvars
+  type: string
+- name: backendServiceArm
+  type: string
+- name: backendAzureRmResourceGroupName
+  type: string
+- name: backendAzureRmStorageAccountName
+  type: string
+- name: backendAzureRmContainerName
+  type: string
+- name: backendAzureRmKey
+  type: string 
+- name: terraformVersion
+  type: string
+- name: apply_working_directory
+  type: string
+- name: known_host
+  type: string
+- name: public_key
+  type: string
+stages:
+ - stage: terraform_prepare_init_plan
+   jobs:
+   - deployment: terraform_prepare_init_plan
+     displayName: terraform_prepare_init_plan
+     environment: 'terraform_prepare_init_plan'
+     timeoutInMinutes: 0
+     strategy: 
+       runOnce:
+         deploy:
+           steps:
+           - checkout: self
+           - task: InstallSSHKey@0
+             displayName: 'Install an SSH key'
+             inputs:   
+               knownHostsEntry: ${{ parameters.known_host }}
+               sshPublicKey: ${{ parameters.public_key }}
+               sshKeySecureFile: 'id_rsa'
+           - task: TerraformInstaller@0
+             displayName: 'Install Terraform ${{ parameters.terraformVersion }}'
+             inputs:
+               terraformVersion: ${{ parameters.terraformVersion }}         
+           - task: TerraformTaskV2@2
+             displayName: 'Terraform : azurerm Init'
+             inputs:
+               workingDirectory: ${{ parameters.working_directory }}
+               backendServiceArm: ${{ parameters.backendServiceArm }}
+               backendAzureRmResourceGroupName: ${{ parameters.backendAzureRmResourceGroupName }}
+               backendAzureRmStorageAccountName: ${{ parameters.backendAzureRmStorageAccountName }}
+               backendAzureRmContainerName:  ${{ parameters.backendAzureRmContainerName }}
+               backendAzureRmKey:  ${{ parameters.backendAzureRmKey }}
+           - task: TerraformTaskV2@2
+             displayName: 'Terraform : Validate'
+             inputs:
+               command: validate
+               workingDirectory: ${{ parameters.working_directory }}
+           - task: TerraformTaskV2@2
+             displayName: 'Terraform : azurerm Plan'
+             inputs:
+               command: plan
+               workingDirectory: ${{ parameters.working_directory }}
+               commandOptions: ${{ parameters.environmental_tfvars }} -out=$(Pipeline.Workspace)\$(build.buildid)_plan.tfplan
+               environmentServiceNameAzureRM: ${{ parameters.environmentservicenameazurerm }}
+           - publish: $(Pipeline.Workspace)\$(build.buildid)_plan.tfplan
+             artifact: "terraformplan"
+ - stage: terraform_apply
+   jobs:
+   - deployment: terraform_apply
+     displayName: terraform_apply
+     environment: 'terraform_apply'
+     timeoutInMinutes: 0
+     strategy: 
+       runOnce:
+         deploy:
+           steps:
+           - checkout: self
+           - task: InstallSSHKey@0
+             displayName: 'Install an SSH key'
+             inputs:   
+               knownHostsEntry: ${{ parameters.known_host }}
+               sshPublicKey: ${{ parameters.public_key }}
+               sshKeySecureFile: 'id_rsa'
+           - task: TerraformInstaller@0
+             displayName: 'Install Terraform ${{ parameters.terraformVersion }}'
+             inputs:
+               terraformVersion: ${{ parameters.terraformVersion }}
+           - task: DownloadPipelineArtifact@2
+             inputs:
+               artifact: terraformplan
+               path: $(Pipeline.Workspace)/terraformplan
+           - task: TerraformTaskV2@2
+             displayName: 'Terraform : azurerm Init'
+             inputs:
+               workingDirectory: ${{ parameters.working_directory }}
+               backendServiceArm: ${{ parameters.backendServiceArm }}
+               backendAzureRmResourceGroupName: ${{ parameters.backendAzureRmResourceGroupName }}
+               backendAzureRmStorageAccountName: ${{ parameters.backendAzureRmStorageAccountName }}
+               backendAzureRmContainerName:  ${{ parameters.backendAzureRmContainerName }}
+               backendAzureRmKey:  ${{ parameters.backendAzureRmKey }}
+           - task: TerraformTaskV2@2
+             displayName: 'Terraform : azurerm Apply'
+             inputs:
+               command: apply
+               workingDirectory: ${{ parameters.working_directory }}
+               commandOptions: '-auto-approve $(Pipeline.Workspace)/terraformplan/$(build.buildid)_plan.tfplan'
+               environmentServiceNameAzureRM: ${{ parameters.environmentservicenameazurerm }}

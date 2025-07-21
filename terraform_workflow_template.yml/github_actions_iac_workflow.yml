@@ -1,0 +1,64 @@
+name: "Terraform Production Deployment"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  terraform:
+    name: "Terraform Security, Compliance & Deployment"
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [prod]
+
+    permissions:
+      id-token: write
+      contents: read
+
+    defaults:
+      run:
+        working-directory: ./acme-ads-prod-infra
+    env:
+      ARM_USE_OIDC: true
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_ENV: ${{ matrix.environment }}
+
+    steps:
+      # 1. Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.5
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      # ✅ 4. Checkov Security Scan
+      - name: Run Checkov Scan
+        uses: bridgecrewio/checkov-action@v12.2820.0
+        with:
+          directory: .
+          framework: terraform
+          quiet: true
+          soft_fail: false # change to true if you want PRs to pass even on failure
+
+      # ✅ 5. Terraform Plan
+      - name: Terraform Plan
+        run: terraform plan -var-file="${TF_ENV}.tfvars" -out=tfplan
+
+      # ✅ 7. Terraform Apply (only on main)
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve tfplan
